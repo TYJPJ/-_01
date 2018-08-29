@@ -1,41 +1,125 @@
-var createError = require('http-errors');
-var express = require('express');
-var path = require('path');
-var cookieParser = require('cookie-parser');
-var logger = require('morgan');
+// const createError = require('http-errors');
 
-var indexRouter = require('./routes/index');
-var usersRouter = require('./routes/users');
+const path = require('path');
+const express = require('express');
+// const cookieParser = require('cookie-parser');
+// const logger = require('morgan');
+const session = require('express-session');
+const MongoStore = require('connect-mongo')(session);
+const flash = require('connect-flash');
+const config = require('config-lite')(__dirname);
+const routes = require('./routes');
+const pkg = require('./package');
+const winston = require('winston');
+const expressWinston = require('express-winston')
+const app = express();
 
-var app = express();
 
-// view engine setup
+
+// 设置模板引擎
 app.set('views', path.join(__dirname, 'views'));
 app.set('view engine', 'ejs');
 
-app.use(logger('dev'));
-app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
-app.use(cookieParser());
+//express generation默认配置暂时不用
+// app.use(logger('dev'));
+// app.use(express.json());
+// app.use(express.urlencoded({ extended: false }));
+// app.use(cookieParser());
+
+//设置静态目录
 app.use(express.static(path.join(__dirname, 'public')));
+//设置中间件
+app.use(session({
+  name: config.session.key, // 设置 cookie 中保存 session id 的字段名称
+  secret: config.session.secret, // 通过设置 secret 来计算 hash 值并放在 cookie 中，使产生的 signedCookie 防篡改
+  resave: true, // 强制更新 session
+  saveUninitialized: false, // 设置为 false，强制创建一个 session，即使用户未登录
+  cookie: {
+    maxAge: config.session.maxAge// 过期时间，过期后 cookie 中的 session id 自动删除
+  },
+  store: new MongoStore({// 将 session 存储到 mongodb
+    url: config.mongodb// mongodb 地址
+  })
+}))
+//flash页面通知
+app.use(flash())
+// 处理表单及文件上传的中间件
+app.use(require('express-formidable')({
+  uploadDir: path.join(__dirname, 'public/img'), // 上传文件目录
+  keepExtensions: true// 保留后缀
+}))
+//// 设置模板全局常量
+app.locals.blog = {
+  title: pkg.name,
+  description: pkg.description
+}
 
-app.use('/', indexRouter);
-app.use('/users', usersRouter);
+// 添加模板必需的三个变量
+app.use(function (req, res, next) {
+  res.locals.user = req.session.user
+  res.locals.success = req.flash('success').toString()
+  res.locals.error = req.flash('error').toString()
+  next()
+})
 
-// catch 404 and forward to error handler
-app.use(function(req, res, next) {
-  next(createError(404));
-});
+// 正常请求的日志
+app.use(expressWinston.logger({
+  transports: [
+    new (winston.transports.Console)({
+      json: true,
+      colorize: true
+    }),
+    new winston.transports.File({
+      filename: 'logs/success.log'
+    })
+  ]
+}))
+// 路由
+routes(app)
+// 错误请求的日志
+app.use(expressWinston.errorLogger({
+  transports: [
+    new winston.transports.Console({
+      json: true,
+      colorize: true
+    }),
+    new winston.transports.File({
+      filename: 'logs/error.log'
+    })
+  ]
+}))
 
-// error handler
-app.use(function(err, req, res, next) {
-  // set locals, only providing error in development
-  res.locals.message = err.message;
-  res.locals.error = req.app.get('env') === 'development' ? err : {};
+// 监听端口，启动程序
+if (module.parent) {
+  // 被 require，则导出 app
+  module.exports = app
+} else {
+  // 监听端口，启动程序
+  app.listen(config.port, function () {
+    console.log(`${pkg.name} listening on port ${config.port}`)
+  })
+}
+//错误通知
+app.use(function (err, req, res, next) {
+  console.error(err)
+  req.flash('error', err.message)
+  res.redirect('/posts')
+})
 
-  // render the error page
-  res.status(err.status || 500);
-  res.render('error');
-});
+// // catch 404 and forward to error handler
+// app.use(function(req, res, next) {
+//   next(createError(404));
+// });
+
+// // error handler
+// app.use(function(err, req, res, next) {
+//   // set locals, only providing error in development
+//   res.locals.message = err.message;
+//   res.locals.error = req.app.get('env') === 'development' ? err : {};
+
+//   // render the error page
+//   res.status(err.status || 500);
+//   res.render('error');
+// });
 
 module.exports = app;
